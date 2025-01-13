@@ -4,28 +4,35 @@
 const int insufficient_balance = 101;
 const int no_staked_tokens = 102;
 
-() mint_reward(slice recipient_address, int reward_amount, slice admin_address, int msg_value) impure {
-  ;; Ensure this function is called by the admin
-  throw_unless(73, equal_slices(my_address(), admin_address));
+() mint_reward(slice user_address, int reward_amount,slice jetton_minter_address) impure {
+    ;; Jetton Minter address
+    ;; slice jetton_minter_address = "your_jetton_minter_address_here".begin_parse();
 
-  ;; Construct the mint operation message
-  var mint_message = begin_cell()
-      .store_uint(op::mint(), 32)      ;; Opcode for mint operation
-      .store_uint(now(), 64)           ;; Query ID (use the current timestamp for uniqueness)
-      .store_slice(recipient_address)  ;; Address of the recipient
-      .store_coins(reward_amount)      ;; Amount of tokens to mint
-      .store_ref(begin_cell()          ;; Master message (custom payload)
-          .store_uint(op::transfer(), 32)
-          .store_uint(now(), 64)
-          .store_coins(reward_amount)
-          .store_slice(recipient_address)
-          .end_cell()
-      )
-      .end_cell();
+    ;; Query ID for the mint operation (can be any unique value)
+    int query_id = now();
 
-  ;; Send the mint message to the master wallet
-  send_raw_message(mint_message, msg_value);
+    ;; Construct the payload for the mint operation
+    var mint_payload = begin_cell()
+        .store_uint(op::mint(), 32)          ;; Operation code for `mint`
+        .store_uint(query_id, 64)           ;; Unique query ID
+        .store_slice(user_address)          ;; Recipient's wallet address
+        .store_coins(reward_amount)         ;; Amount of tokens to mint
+        .store_ref(empty_cell())            ;; Optional metadata (can be replaced with actual data)
+        .end_cell();
+
+    ;; Construct the internal message
+    var msg = begin_cell()
+        .store_uint(0x10, 6)                ;; Internal message flags
+        .store_slice(jetton_minter_address) ;; Target: Jetton Minter address
+        .store_coins(0)                     ;; Value sent (ensure Minter has enough gas to process)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1) ;; Flags and gas values
+        .store_ref(mint_payload)            ;; Attach the mint payload
+        .end_cell();
+
+    ;; Send the message to the Jetton Minter
+    send_raw_message(msg, 1);
 }
+
 
 
 ;; Staking Contract
@@ -63,17 +70,10 @@ const int no_staked_tokens = 102;
     int staking_duration = current_time() - staking_time;
     int reward_amount = calculate_rewards(staked_amount, staking_duration);
 
+    mint_reward(sender_address, reward_amount)
+
     ;; Reset staking details after reward claim
     save_staked_data(sender_address, 0, 0); 
-
-    var master_message = begin_cell()
-        .store_uint(op::reward_metadata(), 32)  ;; Custom opcode for reward metadata
-        .store_uint(now(), 64)                  ;; Query ID
-        .store_coins(reward_amount)             ;; Reward amount for reference
-        .store_slice(sender_address)            ;; Receiver's address
-        .end_cell();
-
-    mint_tokens(sender_address, jetton_wallet_code, reward_amount, master_message);
 
     return ();
 }
