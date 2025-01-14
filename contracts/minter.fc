@@ -9,24 +9,26 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
 
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress transfer_admin_address:MsgAddress jetton_wallet_code:^Cell = Storage;
-(int, slice, slice, cell) load_data() inline {
+(int, slice, slice, cell,cell) load_data() inline {
   slice ds = get_data().begin_parse();
   var data = (
                 ds~load_coins(), ;; total_supply
                 ds~load_msg_addr(), ;; admin_address
                 ds~load_msg_addr(), ;; transfer_admin_address
-                ds~load_ref()  ;; jetton_wallet_code
+                ds~load_ref(),  ;; jetton_wallet_code
+                ds~load_ref() ;; cell containing staking data
               );
   ds.end_parse();
   return data;
 }
 
-() save_data(int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code) impure inline {
+() save_data(int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code ,cell staked_data) impure inline {
   set_data(begin_cell()
             .store_coins(total_supply)
             .store_slice(admin_address)
             .store_slice(transfer_admin_address)
             .store_ref(jetton_wallet_code)
+            .store_ref(staked_data)
            .end_cell()
     );
 }
@@ -38,10 +40,6 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
     .store_uint(0x18, 6)            ;; 0b011000 tag - 0, ihr_disabled - 1, bounce - 1, bounced - 0, src = adr_none$00
     .store_slice(to_wallet_address)
     .store_coins(amount)
-    ;; 1 + 4 + 4 + 64 + 32 zeroes - zeroed extracurrency, ihr_fee, fwd_fee, created_lt and created_at
-    ;; then either 0b111 - 0b11 for Maybe Either^ state init   and 0b1 for Either^ body
-    ;; or
-    ;; 0b0 for no-Maybe init and 0b1 for Either^ body
     .store_uint(need_state_init ? (4 + 2 + 1) : 1, need_state_init ? (1 + 4 + 4 + 64 + 32 + 1 + 1 + 1) : (1 + 4 + 4 + 64 + 32 + 1 + 1));
 
     if (need_state_init) {
@@ -54,6 +52,132 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
 
 }
 
+cell create_inner_staked_data(int amount, int staked_time_period) inline {
+    return begin_cell()
+        .store_coins(amount)                    ;; Store amount
+        .store_uint(staked_time_period, 64)     ;; Store staking timestamp
+        .end_cell();
+}
+
+cell create_nested_staked_data(slice user_address, slice token_address, int amount, int staked_time_period) inline {
+  ;; Create the staked data cell for the token address
+    cell staked_data = create_inner_staked_data(amount, staked_time_period);
+
+    cell inner_dict = begin_cell()
+        .store_dict(dict_set?(null(), token_address, staked_data)) ;; Store token address and its data
+        .end_cell();
+      
+    cell outer_dict = begin_cell()
+        .store_dict(dict_set?(null(), user_address, inner_dict))   ;; Store user address and its inner dictionary
+        .end_cell();
+
+    return outer_dict;
+}
+
+(int, int) get_staked_data(cell staked_data, slice user_address, slice token_address)  inline {
+    ;; Parse the outer dictionary (which maps user address to the inner dictionary)
+    var outer_dict = staked_data.dict_parse();
+
+    ;; Try to get the inner dictionary (which maps token address to staked data) for the user address
+    var maybe_inner_dict = outer_dict.dict_get?(user_address);
+    
+    if (maybe_inner_dict.has_value()) {
+        ;; Retrieve the inner dictionary
+        cell inner_dict_cell = maybe_inner_dict.get();
+        var inner_dict = inner_dict_cell.dict_parse();
+        
+        ;; Retrieve the staked data (amount, staking_time_period, token_address) for the given token address
+        var maybe_value_cell = inner_dict.dict_get?(token_address);
+        
+        if (maybe_value_cell.has_value()) {
+            cell value_cell = maybe_value_cell.get();
+            slice value_slice = value_cell.begin_parse();
+
+            int amount = value_slice~load_coins();
+            int staking_time_period = value_slice~load_uint(64);
+
+            return (amount, staking_time_period);
+        } else {
+            return (0, 0);
+        }
+    } else {
+        return (0, 0);
+    }
+}
+
+int calculate_rewards(int staked_amount, int staking_duration) inline {
+    int reward_rate_per_year = 4; ;; 4% yearly reward rate
+    int duration_in_years = staking_duration / 31536000; ;; Convert seconds to years (31536000 seconds in a year)
+    
+    ;; Calculate reward for the entire duration
+    int total_reward_rate = reward_rate_per_year * duration_in_years;
+
+    ;; Calculate the reward based on the amount staked and total reward rate
+    return muldiv(staked_amount, total_reward_rate, 100);
+}
+
+() update_staked_data( slice user_address, slice token_address, int new_amount, int new_staking_timestamp)impure inline {
+      (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
+      var user_staked_dict = staked_data.dict_parse();
+
+      ;;check if the user excists
+      if(user_staked_dict.exists(user_address)){
+        cell token_data_cell = user_staked_dict.get(user_address);
+         var token_staked_dict = token_data_cell.dict_parse();
+
+          ;; Update or add the token address with the new values (amount, timestamp)
+        cell updated_token_data = begin_cell()
+            .store_coins(new_amount)
+            .store_uint(new_staking_timestamp, 64)
+            .end_cell();
+
+        token_staked_dict.set(token_address, updated_token_data);
+
+        ;; Update the user data in the outer dictionary with the modified inner dictionary
+        cell updated_user_data = begin_cell().store_dict(token_staked_dict).end_cell();
+        user_staked_dict.set(user_address, updated_user_data);
+
+      }
+      else{
+        ;; (cell create_nested_staked_data) = create_nested_staked_data(user_address,token_address,new_amount,new_staking_timestamp);
+        var token_staked_dict = begin_cell().store_coins(new_amount).store_uint(new_staking_timestamp, 64).end_cell();
+        ;; cell updated_user_data = begin_cell().store_dict({token_address => token_staked_dict}).end_cell();
+        ;; var token_dict = dictionary<slice, cell>();;
+        ;; var token_dict = dict_create();
+        var token_dict = dict_new();
+        token_dict.set(token_address, token_staked_data);
+        cell updated_user_data = begin_cell()
+          .store_dict(token_dict) ;; Store the token dictionary
+          .end_cell();
+
+        user_staked_dict.set(user_address, updated_user_data);
+        
+      }
+       ;; Store the updated staked data
+    set_data(begin_cell()
+        .store_coins(total_supply)            ;; Store total supply
+        .store_slice(admin_address)           ;; Store admin address
+        .store_slice(transfer_admin_address)  ;; Store transfer admin address
+        .store_ref(jetton_wallet_code)        ;; Store jetton wallet code
+        .store_ref(user_staked_dict)          ;; Store the updated nested staked data
+        .end_cell());
+
+}
+
+() claim_reward(slice sender_address, slice token_address,int amount, cell master_msg) inline {
+      (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
+      (int staked_amount, int staked_time) = get_staked_data(staked_data,sender_address,token_address);
+      throw_unless(error::not_enouph_staked_balance,staked_amount>0 );
+      throw_unless(error::zero_stack_time,staked_time>0);
+      int staking_duration = now() - staked_time;
+      (int reward_amount) = calculate_rewards(staked_amount,staking_duration);
+      if(reward_amount > 0) {
+        ;; mintToken_base
+        send_to_jetton_wallet(sender_address, jetton_wallet_code, amount, master_msg, 1);
+        update_staked_data(sender_address,token_address,staked_amount,now());
+      }
+}
+;;  update_staked_data( slice user_address, slice token_address, int new_amount, int new_staking_timestamp)
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
     if (in_msg_body.slice_empty?()) { ;; ignore empty messages
         return ();
@@ -82,7 +206,7 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
     int op = in_msg_body~load_uint(32);
     int query_id = in_msg_body~load_uint(64);
 
-    (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code) = load_data();
+    (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
 
     if (op == op::mint) {
         throw_unless(error::not_owner, equal_slices(sender_address, admin_address));
@@ -103,8 +227,33 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
         }
         master_msg_cs.end_parse();
         send_to_jetton_wallet(to_address, jetton_wallet_code, amount, master_msg, 1);
-        save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code);
+        save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code,staked_data);
         return ();
+    }
+
+    if(op == op::claim_reward){
+      ;; slice to_address = sender_address;
+      force_chain(sender_address);
+      int amount = in_msg_body~load_coins();
+      throw_unless(error::invalid_op, amount >= mint_gas_consumption + fwd_fee);
+      slice token_address = in_msg_body~load_msg_addr();
+      cell master_msg = in_msg_body~load_ref();
+        slice master_msg_cs = master_msg.begin_parse();
+        throw_unless(error::invalid_op, master_msg_cs~load_uint(32) == op::internal_transfer);
+        master_msg_cs~skip_bits(64); ;; query_id
+        int jetton_amount = master_msg_cs~load_coins();
+        
+        master_msg_cs~load_msg_addr();
+        master_msg_cs~load_msg_addr();
+        master_msg_cs~load_coins();
+        if( master_msg_cs~load_int(1)) {
+            master_msg_cs~load_ref();
+        }
+        claim_reward(sender_address,token_address,amount,master_msg)
+
+        ;; claim_reward(slice sender_address, slice token_address,int amount, cell master_msg)
+
+        save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code,staked_data);
     }
 
     if (op == op::burn_notification) {
@@ -164,7 +313,7 @@ slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
 
     if (op == op::claim_admin) {
         throw_unless(error::not_owner, equal_slices(sender_address, transfer_admin_address));
-        save_data(total_supply, transfer_admin_address, addr_none(), jetton_wallet_code);
+        save_data(total_supply, transfer_admin_address, addr_none(), jetton_wallet_code,staked_data);
         return ();
     }
 

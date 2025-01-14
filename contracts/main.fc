@@ -85,6 +85,8 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
     return muldiv(staked_amount, reward_rate_per_day * duration_in_days, 100);
 }
 
+
+
 ;; Load and Save Staked Data (Staked Amount + Staking Time)
 (int, int) load_staked_data(slice address) impure {
     ;; Get the stored cell

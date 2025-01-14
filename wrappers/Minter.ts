@@ -6,6 +6,14 @@ export type MinterConfig = {
     jettonWalletCode: Cell;
 };
 
+export type WalletConfig = {
+    jettonWalletCode: Cell;
+    ownerAddress : Address;
+    jettonMasterAddress: Address;
+
+}
+
+
 export function minterConfigToCell(config: MinterConfig): Cell {
     return beginCell()
         .storeCoins(0)
@@ -13,6 +21,45 @@ export function minterConfigToCell(config: MinterConfig): Cell {
         .storeUint(0, 2)
         .storeRef(config.jettonWalletCode)
     .endCell();
+}
+export function walletConfigToCell(config: WalletConfig): Cell {
+    return beginCell()
+        .storeInt(9,4)
+        .storeCoins(0)
+        .storeAddress(config.ownerAddress)
+        .storeAddress(config.jettonMasterAddress)
+        .storeRef(config.jettonWalletCode)
+    .endCell();
+
+
+}
+
+export class Wallet implements Contract {
+    constructor(readonly address: Address, readonly init?: { code: Cell; data: Cell }) {}
+
+    static createFromAddress(address: Address) {
+        return new Wallet(address);
+    }
+
+    static createFromConfig(config: WalletConfig, code: Cell, workchain = 0) {
+        const data = walletConfigToCell(config);
+        const init = { code, data };
+        return new Wallet(contractAddress(workchain, init), init);
+    }
+
+    async sendDeploy(provider: ContractProvider, via: Sender, value: bigint) {
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: beginCell().endCell(),
+        });
+    }
+
+    async getTotalSupply(provider: ContractProvider): Promise<bigint> {
+        const result = (await provider.get('get_wallet_data', [])).stack;
+        result.skip(2);
+        return result.readBigNumber();
+    }
 }
 
 export class Minter implements Contract {

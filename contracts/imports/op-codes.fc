@@ -15,6 +15,8 @@ const error::wrong_op = 0xffff;
 const error::not_owner = 73;
 const error::not_valid_wallet = 74;
 const error::wrong_workchain = 333;
+const error::not_enouph_staked_balance = 111;
+const error::zero_stack_time = 112;
 
 ;; jetton-minter
 
@@ -23,6 +25,7 @@ const op::change_admin = 3;
 const op::claim_admin = 4;
 const op::upgrade = 5;
 const op::call_to = 6;
+const op::claim_reward = 1;
 
 ;; jetton-wallet
 
