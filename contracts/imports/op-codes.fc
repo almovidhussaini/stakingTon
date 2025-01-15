@@ -17,15 +17,18 @@ const error::not_valid_wallet = 74;
 const error::wrong_workchain = 333;
 const error::not_enouph_staked_balance = 111;
 const error::zero_stack_time = 112;
+const error::insufficient_stack_amount = 113;
 
 ;; jetton-minter
 
 const op::mint = 21;
-const op::change_admin = 3;
-const op::claim_admin = 4;
-const op::upgrade = 5;
-const op::call_to = 6;
-const op::claim_reward = 1;
+const op::change_admin = 31;
+const op::claim_admin = 41;
+const op::upgrade = 51;
+const op::call_to = 61;
+const op::claim_reward = 14;
+const op::stake = 15;
+const op::unstake = 16;
 
 ;; jetton-wallet
 

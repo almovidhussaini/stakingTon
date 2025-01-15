@@ -6,6 +6,8 @@
 #include "imports/jetton-utils.fc";
 
 slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
+const hton_wallet_address = "0xDMnxwPS_QCY80iZsHWqjfnP8YmC_qv0wBXuja09vF5hEjk";
+const hton_master_address = "EQDPdq8xjAhytYqfGSX8KcFWIReCufsB9Wdg0pLlYSO_h76w";
 
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress transfer_admin_address:MsgAddress jetton_wallet_code:^Cell = Storage;
@@ -164,6 +166,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
 
 }
 
+
 () claim_reward(slice sender_address, slice token_address,int amount, cell master_msg) inline {
       (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
       (int staked_amount, int staked_time) = get_staked_data(staked_data,sender_address,token_address);
@@ -176,6 +179,21 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
         send_to_jetton_wallet(sender_address, jetton_wallet_code, amount, master_msg, 1);
         update_staked_data(sender_address,token_address,staked_amount,now());
       }
+}
+
+void withdraw_tokens(slice recipient_address, slice token_address, int amount) inline {
+    ;; Construct the Jetton transfer message
+    var jetton_transfer_msg = begin_cell()
+        .store_uint(0xf8a7ea5, 32) ;; Jetton transfer op code
+        .store_uint(0, 64) ;; Query ID
+        .store_coins(toNano(amount)) ;; Token amount to transfer
+        .store_slice(recipient_address) ;; Recipient's address
+        .store_slice(contract_address()) ;; Sender's (contract's) Jetton wallet address
+        .store_ref(null()) ;; No additional payload or metadata
+        .end_cell();
+
+    ;; Send the Jetton transfer message
+    send_raw_message(jetton_transfer_msg, 0);
 }
 ;;  update_staked_data( slice user_address, slice token_address, int new_amount, int new_staking_timestamp)
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
@@ -246,7 +264,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
         master_msg_cs~load_msg_addr();
         master_msg_cs~load_msg_addr();
         master_msg_cs~load_coins();
-        if( master_msg_cs~load_int(1)) {
+        if(master_msg_cs~load_int(1)) {
             master_msg_cs~load_ref();
         }
         claim_reward(sender_address,token_address,amount,master_msg)
@@ -254,6 +272,49 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
         ;; claim_reward(slice sender_address, slice token_address,int amount, cell master_msg)
 
         save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code,staked_data);
+        return();
+    }
+
+    if(op = op::stake) {
+       int amount = in_msg_body~load_coins(); ;;amount of token need to stake
+       throw_unless(error::insufficient_stack_amount, amount > 0);
+       slice token_address = in_msg_body~load_slice(); ;; Token address to stake
+      (sender_prev_amount,sender_prev_stacked_time) stake_data = get_staked_data(staked_data,sender_address,token_address);
+        int new_amount = sender_prev_amount + amount;
+         update_staked_data(sender_address,token_address,new_amount,now());
+         slice jetton_payload = in_msg_body~load_ref_as_slice();
+         ;; space for depositing the token in the contract address
+         ;; Call the Jetton wallet to transfer tokens to the contract
+         cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), hton_master_address, jetton_wallet_code);
+  slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
+
+  cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, hton_master_address, jetton_wallet_code);
+  slice user_address = calculate_jetton_wallet_address(state_init_user_address);
+  
+    var jetton_transfer_msg = begin_cell()
+        .store_uint(0xf8a7ea5, 32) ;; Jetton transfer op code
+        .store_uint(0, 64) ;; Query ID
+        .store_coins(toNano(amount)) ;; Token amount to transfer Function toNano use decimals = 9
+        .store_slice(contract_address) ;; address of the recipient
+        .store_slice(user_address) ;; Token wallet address (destination)
+        .store_ref(null()) ;; Custom payload or metadata
+        .end_cell();
+
+    ;; Send the transfer message to the Jetton wallet
+    send_raw_message(jetton_transfer_msg, 0);
+
+         return();
+
+    }
+    if(op = op::unstake){  
+      int amount = in_msg_body~load_coins();
+      slice token_address = in_msg_body~load_slice();
+      (sender_prev_amount,sender_prev_stacked_time) stake_data = get_staked_data(staked_data,sender_address,token_address);
+      throw_unless(error::insufficient_stack_amount, sender_prev_amount >= amount);
+      int new_amount = sender_prev_amount - amount;
+       update_staked_data(sender_address,token_address,new_amount,sender_prev_stacked_time);
+         withdraw_tokens(sender_address, token_address, amount);
+       return();
     }
 
     if (op == op::burn_notification) {
