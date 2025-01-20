@@ -20,10 +20,22 @@ describe('Minter', () => {
         blockchain = await Blockchain.create();
         admin = await blockchain.treasury('admin');
         user = await blockchain.treasury('user');
+        const name = "Test Token";
+        const description = "Used for testing";
+        const decimals = 9;
 
+        const contentCell =beginCell()
+        .storeUint(1, 8) // Metadata version (if needed, can be omitted if not part of your design)
+        .storeStringTail(name) // Store token name
+        .storeStringTail(description) // Store token description
+        .storeUint(decimals, 8) // Store decimals (8 bits are sufficient for a small number)
+        .endCell();
+  
         minter = blockchain.openContract(Minter.createFromConfig({
             adminAddress: admin.address,
-            jettonWalletCode: await compile('Wallet')
+            jettonWalletCode: await compile('Wallet'),
+            content:contentCell,
+            stakingData: null,
         }, code));
 
         const deployer = await blockchain.treasury('deployer');

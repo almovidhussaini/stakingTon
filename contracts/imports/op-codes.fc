@@ -18,6 +18,7 @@ const error::wrong_workchain = 333;
 const error::not_enouph_staked_balance = 111;
 const error::zero_stack_time = 112;
 const error::insufficient_stack_amount = 113;
+const error::invalid_token_address = 114;
 
 ;; jetton-minter
 

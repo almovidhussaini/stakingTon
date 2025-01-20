@@ -4,6 +4,8 @@ import { TupleItemSlice } from 'ton-core/dist/tuple/tuple';
 export type MinterConfig = {
     adminAddress: Address;
     jettonWalletCode: Cell;
+    content: Cell | null;
+    stakingData: Cell | null;
 };
 
 export type WalletConfig = {
@@ -15,11 +17,12 @@ export type WalletConfig = {
 
 
 export function minterConfigToCell(config: MinterConfig): Cell {
-    return beginCell()
-        .storeCoins(0)
-        .storeAddress(config.adminAddress)
-        .storeUint(0, 2)
-        .storeRef(config.jettonWalletCode)
+    return  beginCell()
+    .storeCoins(0) // Total supply, initialized to 0
+    .storeAddress(config.adminAddress) // Admin address
+    .storeRef(config.content || new Cell()) // Content reference (empty Cell if null)
+    .storeRef(config.jettonWalletCode) // Jetton wallet code
+    .storeRef(config.stakingData || new Cell()) // Staking data reference (empty Cell if null)
     .endCell();
 }
 export function walletConfigToCell(config: WalletConfig): Cell {

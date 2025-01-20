@@ -7,28 +7,31 @@
 
 slice addr_none() asm "<b 0 2 u, b> <s PUSHSLICE";
 const hton_wallet_address = "0xDMnxwPS_QCY80iZsHWqjfnP8YmC_qv0wBXuja09vF5hEjk";
-const hton_master_address = "EQDPdq8xjAhytYqfGSX8KcFWIReCufsB9Wdg0pLlYSO_h76w";
+
+;;const hton_master_address = "EQDPdq8xjAhytYqfGSX8KcFWIReCufsB9Wdg0pLlYSO_h76w"; ;;hipo ton master address
+;;const tsTon_master_address = "EQC98_qAmNEptUtPc7W6xdHh_ZHrBUFpw5Ft_IzNU20QAJav"; ;;tonstakers ton
+;;const stTon_master_address = "EQDNhy-nxYFgUqzfUzImBEP67JqsyMIcyk2S5_RwNNEYku0k"; ;; staked ton
 
 ;; storage scheme
 ;; storage#_ total_supply:Coins admin_address:MsgAddress transfer_admin_address:MsgAddress jetton_wallet_code:^Cell = Storage;
-(int, slice, slice, cell,cell) load_data() inline {
+(int, slice, cell, cell,cell) load_data() inline {
   slice ds = get_data().begin_parse();
   var data = (
                 ds~load_coins(), ;; total_supply
                 ds~load_msg_addr(), ;; admin_address
-                ds~load_msg_addr(), ;; transfer_admin_address
-                ds~load_ref(),  ;; jetton_wallet_code
+                ds~load_ref(),  ;; content name discription, symbol
+                ds~load_ref(),  ;; jetton wallet code
                 ds~load_ref() ;; cell containing staking data
               );
   ds.end_parse();
   return data;
 }
 
-() save_data(int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code ,cell staked_data) impure inline {
+() save_data(int total_supply, slice admin_address, cell content, cell jetton_wallet_code ,cell staked_data) impure inline {
   set_data(begin_cell()
             .store_coins(total_supply)
             .store_slice(admin_address)
-            .store_slice(transfer_admin_address)
+            .store_ref(content)
             .store_ref(jetton_wallet_code)
             .store_ref(staked_data)
            .end_cell()
@@ -119,7 +122,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
 }
 
 () update_staked_data( slice user_address, slice token_address, int new_amount, int new_staking_timestamp)impure inline {
-      (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
+      (int total_supply, slice admin_address,cell content, cell jetton_wallet_code, cell staked_data) = load_data();
       var user_staked_dict = staked_data.dict_parse();
 
       ;;check if the user excists
@@ -159,7 +162,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
     set_data(begin_cell()
         .store_coins(total_supply)            ;; Store total supply
         .store_slice(admin_address)           ;; Store admin address
-        .store_slice(transfer_admin_address)  ;; Store transfer admin address
+        .store_ref(content)   ;; Store content
         .store_ref(jetton_wallet_code)        ;; Store jetton wallet code
         .store_ref(user_staked_dict)          ;; Store the updated nested staked data
         .end_cell());
@@ -168,7 +171,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
 
 
 () claim_reward(slice sender_address, slice token_address,int amount, cell master_msg) inline {
-      (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
+      (int total_supply, slice admin_address, cell content, cell jetton_wallet_code, cell staked_data) = load_data();
       (int staked_amount, int staked_time) = get_staked_data(staked_data,sender_address,token_address);
       throw_unless(error::not_enouph_staked_balance,staked_amount>0 );
       throw_unless(error::zero_stack_time,staked_time>0);
@@ -181,15 +184,25 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
       }
 }
 
-void withdraw_tokens(slice recipient_address, slice token_address, int amount) inline {
+void withdraw_tokens(slice recipient_address, slice token_address, int amount, slice contract_address, slice user_address) inline {
+;; contract_address,user_address
+  (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,cell staked_data) = load_data();
+
+  ;;  cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), token_address, jetton_wallet_code);
+  ;; slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
+
+  ;; cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, token_address, jetton_wallet_code);
+  ;; slice user_address = calculate_jetton_wallet_address(state_init_user_address);
     ;; Construct the Jetton transfer message
     var jetton_transfer_msg = begin_cell()
         .store_uint(0xf8a7ea5, 32) ;; Jetton transfer op code
         .store_uint(0, 64) ;; Query ID
         .store_coins(toNano(amount)) ;; Token amount to transfer
-        .store_slice(recipient_address) ;; Recipient's address
-        .store_slice(contract_address()) ;; Sender's (contract's) Jetton wallet address
-        .store_ref(null()) ;; No additional payload or metadata
+        .store_slice(user_address) ;; Recipient's address
+        .store_slice(contract_address) ;; Sender's (contract's) Jetton wallet address
+        .store_bit(0) ;; no custom payload
+        .store_coins(0) ;; forward amount - if > 0, will send notification message
+        .store_bit(0) 
         .end_cell();
 
     ;; Send the Jetton transfer message
@@ -210,8 +223,8 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         }
         in_msg_body~skip_bits(64); ;; query_id
         int jetton_amount = in_msg_body~load_coins();
-        (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code) = load_data();
-        save_data(total_supply - jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code);
+        (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
+        save_data(total_supply - jetton_amount, admin_address, content, jetton_wallet_code);
         return ();
     }
     slice sender_address = cs~load_msg_addr();
@@ -224,7 +237,7 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
     int op = in_msg_body~load_uint(32);
     int query_id = in_msg_body~load_uint(64);
 
-    (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code, cell staked_data) = load_data();
+    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code, cell staked_data) = load_data();
 
     if (op == op::mint) {
         throw_unless(error::not_owner, equal_slices(sender_address, admin_address));
@@ -245,7 +258,7 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         }
         master_msg_cs.end_parse();
         send_to_jetton_wallet(to_address, jetton_wallet_code, amount, master_msg, 1);
-        save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code,staked_data);
+        save_data(total_supply + jetton_amount, admin_address, content, jetton_wallet_code,staked_data);
         return ();
     }
 
@@ -271,7 +284,7 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
 
         ;; claim_reward(slice sender_address, slice token_address,int amount, cell master_msg)
 
-        save_data(total_supply + jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code,staked_data);
+        save_data(total_supply + jetton_amount, admin_address, content, jetton_wallet_code,staked_data);
         return();
     }
 
@@ -283,13 +296,14 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         int new_amount = sender_prev_amount + amount;
          update_staked_data(sender_address,token_address,new_amount,now());
          slice jetton_payload = in_msg_body~load_ref_as_slice();
-         ;; space for depositing the token in the contract address
-         ;; Call the Jetton wallet to transfer tokens to the contract
-         cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), hton_master_address, jetton_wallet_code);
-  slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
 
-  cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, hton_master_address, jetton_wallet_code);
-  slice user_address = calculate_jetton_wallet_address(state_init_user_address);
+  ;;        cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), token_address, jetton_wallet_code);
+  ;; slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
+
+  ;; cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, token_address, jetton_wallet_code);
+  ;; slice user_address = calculate_jetton_wallet_address(state_init_user_address);
+  slice contract_address = in_msg_body.load_msg_addr();
+  slice user_address = in_msg_body.load_msg_addr();
   
     var jetton_transfer_msg = begin_cell()
         .store_uint(0xf8a7ea5, 32) ;; Jetton transfer op code
@@ -297,7 +311,9 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         .store_coins(toNano(amount)) ;; Token amount to transfer Function toNano use decimals = 9
         .store_slice(contract_address) ;; address of the recipient
         .store_slice(user_address) ;; Token wallet address (destination)
-        .store_ref(null()) ;; Custom payload or metadata
+        .store_bit(0) ;; no custom payload
+        .store_coins(0) ;; forward amount - if > 0, will send notification message
+        .store_bit(0) ;;we store forwardPayload as a reference, set 1 and uncomment next line for have a comment
         .end_cell();
 
     ;; Send the transfer message to the Jetton wallet
@@ -312,8 +328,11 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
       (sender_prev_amount,sender_prev_stacked_time) stake_data = get_staked_data(staked_data,sender_address,token_address);
       throw_unless(error::insufficient_stack_amount, sender_prev_amount >= amount);
       int new_amount = sender_prev_amount - amount;
+
+      slice contract_address = in_msg_body.load_msg_addr();
+  slice user_address = in_msg_body.load_msg_addr();
        update_staked_data(sender_address,token_address,new_amount,sender_prev_stacked_time);
-         withdraw_tokens(sender_address, token_address, amount);
+         withdraw_tokens(sender_address, token_address, amount,contract_address,user_address);
        return();
     }
 
@@ -323,7 +342,7 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         throw_unless(error::not_valid_wallet,
             equal_slices(calculate_user_jetton_wallet_address(from_address, my_address(), jetton_wallet_code), sender_address)
         );
-        save_data(total_supply - jetton_amount, admin_address, transfer_admin_address, jetton_wallet_code);
+        save_data(total_supply - jetton_amount, admin_address, content, jetton_wallet_code);
         slice response_address = in_msg_body~load_msg_addr();
         if (response_address.preload_uint(2) != 0) {
             var msg = begin_cell()
@@ -337,81 +356,6 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
         }
         return ();
     }
-
-    if (op == op::provide_wallet_address) {
-        throw_unless(75, msg_value > fwd_fee + provide_address_gas_consumption);
-
-        slice owner_address = in_msg_body~load_msg_addr();
-        int include_address? = in_msg_body~load_uint(1);
-
-        cell included_address = include_address?
-                ? begin_cell().store_slice(owner_address).end_cell()
-                : null();
-
-        var msg = begin_cell()
-                .store_uint(0x18, 6)
-                .store_slice(sender_address)
-                .store_coins(0)
-                .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-                .store_uint(op::take_wallet_address, 32)
-                .store_uint(query_id, 64);
-
-        if (is_resolvable?(owner_address)) {
-            msg = msg.store_slice(calculate_user_jetton_wallet_address(owner_address, my_address(), jetton_wallet_code));
-        } else {
-            msg = msg.store_uint(0, 2); ;; addr_none
-        }
-        send_raw_message(msg.store_maybe_ref(included_address).end_cell(), REVERT_ON_ERRORS | CARRY_REMAINING_GAS);
-        return ();
-    }
-
-    if (op == op::change_admin) {
-        throw_unless(error::not_owner, equal_slices(sender_address, admin_address));
-        slice new_admin_address = in_msg_body~load_msg_addr();
-        save_data(total_supply, admin_address, new_admin_address, jetton_wallet_code);
-        return ();
-    }
-
-    if (op == op::claim_admin) {
-        throw_unless(error::not_owner, equal_slices(sender_address, transfer_admin_address));
-        save_data(total_supply, transfer_admin_address, addr_none(), jetton_wallet_code,staked_data);
-        return ();
-    }
-
-    if (op == op::call_to) {  ;; can be used to lock, unlock or reedem funds
-        throw_unless(error::not_owner, equal_slices(sender_address, admin_address));
-        slice to_address = in_msg_body~load_msg_addr();
-        int amount = in_msg_body~load_coins();
-        cell master_msg = in_msg_body~load_ref();
-        slice master_msg_cs = master_msg.begin_parse();
-        int master_op = master_msg_cs~load_uint(32);
-        master_msg_cs~load_uint(64);
-        ;; parse-validate messages
-        if(master_op == op::transfer) {
-          master_msg_cs~load_coins();
-          master_msg_cs~load_msg_addr();
-          master_msg_cs~load_msg_addr();
-          master_msg_cs~load_maybe_ref();
-          master_msg_cs~load_coins();
-          if( master_msg_cs~load_int(1)) {
-            master_msg_cs~load_ref();
-          }
-          master_msg_cs.end_parse();
-        } elseif (master_op == op::burn) {
-          master_msg_cs~load_coins();
-          master_msg_cs~load_msg_addr();
-          master_msg_cs~load_maybe_ref();
-          master_msg_cs.end_parse();
-        } elseif (master_op == op::set_status) {
-          master_msg_cs~load_uint(4);
-          master_msg_cs.end_parse();
-        } else {
-          throw(error::invalid_op);
-        }
-        send_to_jetton_wallet(to_address, jetton_wallet_code, amount, master_msg, 0);
-        return ();
-    }
-
     if (op == op::upgrade) {
         throw_unless(error::not_owner, equal_slices(sender_address, admin_address));
         (cell new_data, cell new_code) = (in_msg_body~load_ref(), in_msg_body~load_ref());
@@ -423,24 +367,12 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount) i
     throw(error::wrong_op);
 }
 
-cell build_content_cell() {
-    cell content_dict = new_dict();
-
-    content_dict~udict_set_ref(256, "uri"H, begin_cell().store_uint(0, 8).store_slice("ton-stable.ton").end_cell());
-    content_dict~udict_set_ref(256, "decimals"H, begin_cell().store_uint(0, 8).store_slice("9").end_cell());
-    content_dict~udict_set_ref(256, "name"H, begin_cell().store_uint(0, 8).store_slice("Ton Stable Coin").end_cell());
-    content_dict~udict_set_ref(256, "symbol"H, begin_cell().store_uint(0, 8).store_slice("💵").end_cell());
-
-    cell content = begin_cell().store_uint(0, 8).store_dict(content_dict).end_cell();
-    return content;
-}
-
 (int, int, slice, cell, cell) get_jetton_data() method_id {
-    (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code) = load_data();
-    return (total_supply, -1, admin_address, build_content_cell(), jetton_wallet_code);
+    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
+    return (total_supply, -1, admin_address, content, jetton_wallet_code);
 }
 
 slice get_wallet_address(slice owner_address) method_id {
-    (int total_supply, slice admin_address, slice transfer_admin_address, cell jetton_wallet_code) = load_data();
+    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
     return calculate_user_jetton_wallet_address(owner_address, my_address(), jetton_wallet_code);
 }
