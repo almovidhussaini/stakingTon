@@ -187,12 +187,7 @@ int calculate_rewards(int staked_amount, int staking_duration) inline {
 void withdraw_tokens(slice recipient_address, slice token_address, int amount, slice contract_address, slice user_address) inline {
 ;; contract_address,user_address
   (int total_supply, slice admin_address, cell content, cell jetton_wallet_code,cell staked_data) = load_data();
-
-  ;;  cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), token_address, jetton_wallet_code);
-  ;; slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
-
-  ;; cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, token_address, jetton_wallet_code);
-  ;; slice user_address = calculate_jetton_wallet_address(state_init_user_address);
+  
     ;; Construct the Jetton transfer message
     var jetton_transfer_msg = begin_cell()
         .store_uint(0xf8a7ea5, 32) ;; Jetton transfer op code
@@ -296,12 +291,6 @@ void withdraw_tokens(slice recipient_address, slice token_address, int amount, s
         int new_amount = sender_prev_amount + amount;
          update_staked_data(sender_address,token_address,new_amount,now());
          slice jetton_payload = in_msg_body~load_ref_as_slice();
-
-  ;;        cell state_init_contract_address = calculate_jetton_wallet_state_init(my_address(), token_address, jetton_wallet_code);
-  ;; slice contract_address = calculate_jetton_wallet_address(state_init_contract_address);
-
-  ;; cell state_init_user_address = calculate_jetton_wallet_state_init(sender_address, token_address, jetton_wallet_code);
-  ;; slice user_address = calculate_jetton_wallet_address(state_init_user_address);
   slice contract_address = in_msg_body.load_msg_addr();
   slice user_address = in_msg_body.load_msg_addr();
   
